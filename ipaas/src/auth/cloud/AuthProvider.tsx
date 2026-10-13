@@ -16,7 +16,7 @@
  * under the License.
  */
 
-import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import type { JSX, ReactNode } from 'react';
 import { ThunderIDProvider, useThunderID } from '@thunderid/react';
 import { hasAuthParamsInUrl, hasCalledForThisInstanceInUrl } from '@thunderid/browser';
@@ -27,6 +27,7 @@ import type { AuthContextValue } from '../contract';
 import { decodeJwtPayload, isExpired, stringClaim } from './jwt';
 import { clearLegacySession } from './legacySession';
 import { connect, disconnect, type CloudSession, type CloudUser } from './session';
+import { relaySilentSignIn } from './silentSignIn';
 import { THUNDER_INSTANCE_ID, signInParams, thunderConfig } from './thunderConfig';
 
 const ORG_HANDLE_KEY = 'org_handle';
@@ -36,6 +37,8 @@ const SIGNED_OUT_USER: CloudUser = { userId: '', username: '', displayName: '' }
 const REFRESH_WAIT_MS = 5_000;
 const RECHECK_MS = 250;
 
+// Before giving up on a session, one prompt=none attempt joins a Thunder session from another console.
+type Silent = 'idle' | 'trying' | 'done';
 type Status = { kind: 'pending' } | { kind: 'signedIn'; session: CloudSession } | { kind: 'signedOut'; error: string | null };
 
 const AuthContext = createContext<AuthContextValue | null>(null);
@@ -86,6 +89,7 @@ function toSession(accessToken: string, idClaims: Record<string, unknown> | null
 }
 
 export function AuthProvider({ children }: { children: ReactNode }): JSX.Element {
+  const [isSilentFrame] = useState(relaySilentSignIn);
   const [editorUrl] = useState(editorForwardUrl);
   const [config] = useState(thunderConfig);
 
@@ -97,6 +101,8 @@ export function AuthProvider({ children }: { children: ReactNode }): JSX.Element
     if (editorUrl) window.location.href = editorUrl;
   }, [editorUrl]);
 
+  // The SDK's prompt=none iframe only relays Thunder's answer to the console around it.
+  if (isSilentFrame) return <></>;
   // The SDK never mounts for an editor's sign-in, so its code is forwarded untouched.
   if (editorUrl) return <PageLoader viewport label="Completing sign in…" />;
 
@@ -108,10 +114,13 @@ export function AuthProvider({ children }: { children: ReactNode }): JSX.Element
 }
 
 function CloudSessionProvider({ children }: { children: ReactNode }): JSX.Element {
-  const { isInitialized, isLoading, isSignedIn, getAccessToken, getDecodedIdToken, clearSession, signIn, signOut } = useThunderID();
+  const { isInitialized, isLoading, isSignedIn, getAccessToken, getDecodedIdToken, clearSession, signIn, signInSilently, signOut } = useThunderID();
   const [hasCode] = useState(sdkHasCode);
   const [status, setStatus] = useState<Status>({ kind: 'pending' });
-  const [mountedAt] = useState(Date.now);
+  // A sign-in landing already carries Thunder's answer.
+  const [silent, setSilent] = useState<Silent>(hasCode ? 'done' : 'idle');
+  const silentStarted = useRef(false);
+  const [waitFrom, setWaitFrom] = useState(Date.now);
   const [recheck, setRecheck] = useState(0);
 
   const endSession = useCallback(
@@ -129,19 +138,20 @@ function CloudSessionProvider({ children }: { children: ReactNode }): JSX.Elemen
     if (status.kind !== 'pending' || !isInitialized) return;
     // Still exchanging the code it was handed.
     if (hasCode && isLoading && !isSignedIn) return;
+    if (silent === 'trying') return;
 
     let cancelled = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
     const settle = async (): Promise<void> => {
       const accessToken = await getAccessToken();
       if (cancelled) return;
-      if (!accessToken) return setStatus({ kind: 'signedOut', error: null });
+      if (!accessToken) return silent === 'idle' ? setSilent('trying') : setStatus({ kind: 'signedOut', error: null });
       // The SDK's isSignedIn means "holds an unexpired token", so a stored session it has not
       // confirmed is one it is still restoring — or refreshing, if the token expired. Neither
       // outlasts the wait: a refresh that has not landed by then (the refresh token expired too,
       // or there never was one) leaves nothing to restore.
       if (!isSignedIn || isExpired(accessToken)) {
-        if (Date.now() - mountedAt < REFRESH_WAIT_MS) {
+        if (Date.now() - waitFrom < REFRESH_WAIT_MS) {
           timer = setTimeout(() => setRecheck((n) => n + 1), RECHECK_MS);
           return;
         }
@@ -169,7 +179,21 @@ function CloudSessionProvider({ children }: { children: ReactNode }): JSX.Elemen
       cancelled = true;
       clearTimeout(timer);
     };
-  }, [status.kind, hasCode, isInitialized, isLoading, isSignedIn, recheck, mountedAt, getAccessToken, getDecodedIdToken, endSession]);
+  }, [status.kind, hasCode, silent, isInitialized, isLoading, isSignedIn, recheck, waitFrom, getAccessToken, getDecodedIdToken, endSession]);
+
+  // Thunder answers prompt=none without its sign-in page: a code when it holds a session, else
+  // login_required. Either way it is tried once; with no session, /login signs in interactively.
+  useEffect(() => {
+    if (silent !== 'trying' || silentStarted.current) return;
+    silentStarted.current = true;
+    signInSilently(signInParams())
+      .catch(() => false)
+      .finally(() => {
+        // The SDK confirms the new session on its next poll; give it the usual wait from here.
+        setWaitFrom(Date.now());
+        setSilent('done');
+      });
+  }, [silent, signInSilently]);
 
   const loginWithOIDC = useCallback(
     async (fidp?: string) => {
