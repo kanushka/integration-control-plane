@@ -27,7 +27,6 @@ import type { AuthContextValue } from '../contract';
 import { decodeJwtPayload, isExpired, stringClaim } from './jwt';
 import { clearLegacySession } from './legacySession';
 import { connect, disconnect, type CloudSession, type CloudUser } from './session';
-import { relaySilentSignIn } from './silentSignIn';
 import { THUNDER_INSTANCE_ID, signInParams, thunderConfig } from './thunderConfig';
 
 const ORG_HANDLE_KEY = 'org_handle';
@@ -89,7 +88,6 @@ function toSession(accessToken: string, idClaims: Record<string, unknown> | null
 }
 
 export function AuthProvider({ children }: { children: ReactNode }): JSX.Element {
-  const [isSilentFrame] = useState(relaySilentSignIn);
   const [editorUrl] = useState(editorForwardUrl);
   const [config] = useState(thunderConfig);
 
@@ -101,8 +99,6 @@ export function AuthProvider({ children }: { children: ReactNode }): JSX.Element
     if (editorUrl) window.location.href = editorUrl;
   }, [editorUrl]);
 
-  // The SDK's prompt=none iframe only relays Thunder's answer to the console around it.
-  if (isSilentFrame) return <></>;
   // The SDK never mounts for an editor's sign-in, so its code is forwarded untouched.
   if (editorUrl) return <PageLoader viewport label="Completing sign in…" />;
 
