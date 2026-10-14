@@ -113,8 +113,8 @@ function CloudSessionProvider({ children }: { children: ReactNode }): JSX.Elemen
   const { isInitialized, isLoading, isSignedIn, getAccessToken, getDecodedIdToken, clearSession, signIn, signInSilently, signOut } = useThunderID();
   const [hasCode] = useState(sdkHasCode);
   const [status, setStatus] = useState<Status>({ kind: 'pending' });
-  // A sign-in landing already carries Thunder's answer.
-  const [silent, setSilent] = useState<Silent>(hasCode ? 'done' : 'idle');
+  // A sign-in landing already carries Thunder's answer, a code or an error.
+  const [silent, setSilent] = useState<Silent>(() => (hasCode || isSignInLanding() ? 'done' : 'idle'));
   const silentStarted = useRef(false);
   const [waitFrom, setWaitFrom] = useState(Date.now);
   const [recheck, setRecheck] = useState(0);

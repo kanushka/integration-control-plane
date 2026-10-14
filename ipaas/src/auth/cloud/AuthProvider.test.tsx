@@ -352,6 +352,13 @@ describe('cloud AuthProvider — joining a Thunder session', () => {
     expect(sdk.get().signInSilently).not.toHaveBeenCalled();
   });
 
+  it('does not ask on a sign-in landing that carries an error, not a code', async () => {
+    window.history.replaceState({}, '', '/signin?error=access_denied&state=instance_0_request_0');
+    sdkWith();
+    await render();
+    expect(sdk.get().signInSilently).not.toHaveBeenCalled();
+  });
+
   it('does not ask when a stored session is restored', async () => {
     signedInSdk();
     await render();
