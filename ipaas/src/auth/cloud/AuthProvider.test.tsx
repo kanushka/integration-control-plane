@@ -345,6 +345,15 @@ describe('cloud AuthProvider — joining a Thunder session', () => {
     expect(sdk.get().signInSilently).toHaveBeenCalledTimes(1);
   });
 
+  it('settles signed out when Thunder does not answer within 3s', async () => {
+    sdkWith({ signInSilently: vi.fn(() => new Promise<boolean>(() => {})) });
+    await render();
+    expect(screen()).toBe('loading');
+    await settle(3_000);
+    expect(screen()).toBe('signed-out');
+    expect(sdk.get().signInSilently).toHaveBeenCalledTimes(1);
+  });
+
   it('does not ask on a sign-in landing, which carries Thunder’s answer', async () => {
     window.history.replaceState({}, '', '/signin?code=abc&state=instance_0_request_0');
     sdkWith();

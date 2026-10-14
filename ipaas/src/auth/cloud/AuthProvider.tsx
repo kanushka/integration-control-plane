@@ -35,6 +35,9 @@ const SIGNED_OUT_USER: CloudUser = { userId: '', username: '', displayName: '' }
 // How long a stored session may take to restore, including the SDK's startup refresh of an expired token.
 const REFRESH_WAIT_MS = 5_000;
 const RECHECK_MS = 250;
+// A working prompt=none answer takes about a second. The SDK waits 10s for an iframe that never
+// answers (e.g. framing blocked), so give up sooner and sign in interactively.
+const SILENT_SIGN_IN_TIMEOUT_MS = 3_000;
 
 // Before giving up on a session, one prompt=none attempt joins a Thunder session from another console.
 type Silent = 'idle' | 'trying' | 'done';
@@ -182,9 +185,14 @@ function CloudSessionProvider({ children }: { children: ReactNode }): JSX.Elemen
   useEffect(() => {
     if (silent !== 'trying' || silentStarted.current) return;
     silentStarted.current = true;
-    signInSilently(signInParams())
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timeout = new Promise<false>((resolve) => {
+      timer = setTimeout(() => resolve(false), SILENT_SIGN_IN_TIMEOUT_MS);
+    });
+    Promise.race([signInSilently(signInParams()), timeout])
       .catch(() => false)
       .finally(() => {
+        clearTimeout(timer);
         // The SDK confirms the new session on its next poll; give it the usual wait from here.
         setWaitFrom(Date.now());
         setSilent('done');
